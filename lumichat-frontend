@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LumiChat - Canlı Görüntülü Sohbet</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body { margin: 0; background: #0b131a; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        .header { background: #0f1c24; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #00e5ff; }
+        .main-container { display: flex; flex: 1; padding: 20px; gap: 20px; box-sizing: border-box; height: calc(100vh - 140px); }
+        .video-box { flex: 1; background: #142530; border: 2px solid #00e5ff; border-radius: 12px; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+        .chat-container { width: 400px; background: #142530; border: 2px solid #00e5ff; border-radius: 12px; display: flex; flex-direction: column; }
+        #chatBox { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .message { padding: 10px; border-radius: 8px; max-width: 80%; word-break: break-all; }
+        .system { background: rgba(0, 229, 255, 0.1); color: #00e5ff; border: 1px solid #00e5ff; align-self: center; }
+        .my-message { background: #00e5ff; color: #000; align-self: flex-end; }
+        .stranger-message { background: #3a4f5c; color: #fff; align-self: flex-start; }
+        .input-area { padding: 15px; display: flex; gap: 10px; border-top: 1px solid #233948; }
+        input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #233948; background: #0f1c24; color: #fff; outline: none; }
+        button { padding: 12px 24px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        #sendBtn { background: #00e5ff; color: #000; }
+        .bottom-bar { height: 70px; display: flex; justify-content: center; align-items: center; background: #0f1c24; gap: 15px; border-top: 1px solid #233948; }
+        #startBtn { background: #00e5ff; color: #000; font-size: 16px; padding: 10px 30px; }
+        #startBtn.next { background: #ffbc00; color: #000; }
+        .toggle-btn { background: #3a4f5c; color: #fff; font-size: 14px; padding: 10px 20px; }
+        .toggle-btn.off { background: #ff4757; color: #fff; }
+        .label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 5px; font-size: 12px; border: 1px solid #00e5ff; z-index: 10; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>LumiChat</h2>
+        <div style="color: #00e5ff;">🟢 Çevrimiçi</div>
+    </div>
+
+    <div class="main-container">
+        <div class="video-box">
+            <span class="label">Sen</span>
+            <video id="localVideo" autoplay muted playsinline></video>
+        </div>
+        <div class="video-box">
+            <span class="label">Yabancı</span>
+            <div id="placeholder">Bağlantı bekleniyor...</div>
+            <video id="remoteVideo" autoplay playsinline style="display:none;"></video>
+        </div>
+        <div class="chat-container">
+            <div id="chatBox">
+                <div class="message system">LumiChat odasına hoş geldiniz! Başlamak için alttaki burona basın.</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="messageInput" placeholder="Mesajınızı yazın...">
+                <button id="sendBtn">Gönder</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="bottom-bar">
+        <button id="camBtn" class="toggle-btn">📹 Kamerayı Kapat</button>
+        <button id="startBtn">Sohbete Başla</button>
+        <button id="micBtn" class="toggle-btn">🎙️ Mikrofonu Kapat</button>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const camBtn = document.getElementById('camBtn');
+        const micBtn = document.getElementById('micBtn');
+        const messageInput = document.getElementById('messageInput');
+        const chatBox = document.getElementById('chatBox');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const placeholder = document.getElementById('placeholder');
+        
+        let localStream = null;
+        let peerConnection = null;
+        let isCamOn = true;
+        let isMicOn = true;
+
+        // Ücretsiz Google STUN Sunucusu (Cihazların internette birbirini bulması için)
+        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        
+        // Yerel kamera ve mikrofonu başlatıyoruz
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then(stream => { 
+                localStream = stream;
+                localVideo.srcObject = stream; 
+            })
+            .catch(err => { console.log("Kamera/Mikrofon erişim hatası: ", err); });
+
+        // Kamera Kapatma/Açma Butonu
+        camBtn.addEventListener('click', () => {
+            if (localStream) {
+                isCamOn = !isCamOn;
+                localStream.getVideoTracks()[0].enabled = isCamOn;
+                camBtn.innerText = isCamOn ? "📹 Kamerayı Kapat" : "❌ Kamerayı Aç";
+                camBtn.classList.toggle('off', !isCamOn);
+            }
+        });
+
+        // Mikrofon Kapatma/Açma Butonu
+        micBtn.addEventListener('click', () => {
+            if (localStream) {
+                isMicOn = !isMicOn;
+                localStream.getAudioTracks()[0].enabled = isMicOn;
+                micBtn.innerText = isMicOn ? "🎙️ Mikrofonu Kapat" : "❌ Mikrofonu Aç";
+                micBtn.classList.toggle('off', !isMicOn);
+            }
+        });
+
+        // Sunucu Bağlantısı (Local test için)
+      const socket = io('https://lumichat-motor.onrender.com');
+
+        // Ana Buton Mantığı (Sohbete Başla / Sıradaki)
+        startBtn.addEventListener('click', () => {
+            if (startBtn.innerText === "Sıradaki") {
+                closePeerConnection();
+                socket.emit('leave');
+                chatBox.innerHTML += '<div class="message system">Yeni birini arıyorsunuz...</div>';
+            }
+            socket.emit('join');
+            startBtn.innerText = "Aranıyor...";
+            startBtn.classList.remove('next');
+        });
+
+        socket.on('waiting', () => {
+            chatBox.innerHTML += '<div class="message system">Yabancı aranıyor...</div>';
+        });
+
+        socket.on('matched', async (data) => {
+            chatBox.innerHTML += '<div class="message system">Biri bulundu! Sohbet başladı.</div>';
+            startBtn.innerText = "Sıradaki";
+            startBtn.classList.add('next');
+            placeholder.style.display = 'none';
+            remoteVideo.style.display = 'block';
+
+            // Eşleşme olunca WebRTC köprüsünü kur
+            setupPeerConnection();
+
+            // Odayı tetikleyen ilk kişi (isInitiator) teklif (Offer) oluşturur
+            if (data.isInitiator) {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                socket.emit('signal', { offer });
+            }
+        });
+
+        // WebRTC Sinyal Alışveriş Odası
+        socket.on('signal', async (data) => {
+            if (!peerConnection) setupPeerConnection();
+
+            if (data.offer) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.emit('signal', { answer });
+            } else if (data.answer) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+            } else if (data.candidate) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        });
+
+        // WebRTC Bağlantısını Yapılandırma
+        function setupPeerConnection() {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // Kendi görüntümüzü karşı tarafa akıtıyoruz
+            if (localStream) {
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            }
+
+            // Karşı tarafın görüntüsü geldiğinde video elementine bağla
+            peerConnection.ontrack = (event) => {
+                if (remoteVideo.srcObject !== event.streams[0]) {
+                    remoteVideo.srcObject = event.streams[0];
+                }
+            };
+
+            // İnternet yol haritalarını (ICE) karşıya gönder
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('signal', { candidate: event.candidate });
+                }
+            };
+        }
+
+        // Bağlantıyı Güvenli Şekilde Sıfırlama (Sıradaki dendiğinde)
+        function closePeerConnection() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            placeholder.style.display = 'flex';
+            remoteVideo.style.display = 'none';
+        }
+
+        // Karşı taraf sıradakine geçtiğinde
+        socket.on('strangerLeft', () => {
+            chatBox.innerHTML += '<div class="message system">Yabancı ayrıldı. Yeni birini bulmak için butona basın.</div>';
+            closePeerConnection();
+        });
+
+        // Mesaj Gönderme Butonu
+        sendBtn.addEventListener('click', () => {
+            const msg = messageInput.value.trim();
+            if(msg !== "") {
+                socket.emit('message', msg);
+                chatBox.innerHTML += `<div class="message my-message"><b>Sen:</b> ${msg}</div>`;
+                messageInput.value = "";
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        });
+
+        // Mesajı klavyeden Enter tuşuyla da gönderebilmek için konfor eklentisi
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendBtn.click();
+        });
+
+        // Mesaj Alma
+        socket.on('message', (msg) => {
+            chatBox.innerHTML += `<div class="message stranger-message"><b>Yabancı:</b> ${msg}</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+    </script>
+</body>
+</html>
